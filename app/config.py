@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     ALLOWED_TYPES: str = "txt,log,csv,json,pdf,png,jpg,zip"
     RATE_LIMIT_LOGIN: str = "5/minute"
     RATE_LIMIT_TRANSFER: str = "10/minute"
+    RATE_LIMIT_UPLOAD: str = "10/minute"
     SEED_ADMIN_USERNAME: str = "admin"
     SEED_ADMIN_PASSWORD: str = ""
     LOG_LEVEL: str = "INFO"
