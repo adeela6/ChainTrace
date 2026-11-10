@@ -36,6 +36,7 @@ def build_test_env(base: Path) -> dict[str, str]:
         "ALLOWED_TYPES": "txt,log,csv,json,pdf,png,jpg,zip",
         "RATE_LIMIT_LOGIN": "5/minute",
         "RATE_LIMIT_TRANSFER": "10/minute",
+        "RATE_LIMIT_UPLOAD": "10/minute",
         "SEED_ADMIN_USERNAME": "admin",
         "SEED_ADMIN_PASSWORD": TEST_ADMIN_PASSWORD,
         "LOG_LEVEL": "WARNING",
