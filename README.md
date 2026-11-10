@@ -30,6 +30,16 @@ uvicorn app.main:app --reload
 
 Never commit `.env`, databases, or anything under `storage/`.
 
+## Tests
+
+```bash
+pytest                                  # all tests
+python scripts/make_test_results.py     # run tests and regenerate docs/test-results.md
+coverage run -m pytest && coverage report
+```
+
+Tests use a temporary database, storage folder and master key, so they never touch your real `.env` or data. See [docs/test-plan.md](docs/test-plan.md) for what is tested and why.
+
 ## Git workflow
 
 - **No direct pushes to `main`.**
