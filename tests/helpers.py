@@ -20,24 +20,32 @@ ERROR_CODES = {
     "INVALID_CREDENTIALS": 401,
     "FORBIDDEN": 403,
     "CSRF_FAILED": 403,
+    "REAUTH_FAILED": 403,
     "NOT_FOUND": 404,
     "NOT_CUSTODIAN": 409,
+    "NOT_RECEIVER": 409,
+    "TRANSFER_NOT_PENDING": 409,
     "DUPLICATE_TRANSFER": 409,
     "DUPLICATE_EVIDENCE": 409,
     "INVALID_SIGNATURE": 422,
+    "INVALID_RECIPIENT": 422,
     "HASH_MISMATCH": 422,
     "RATE_LIMITED": 429,
     "INTERNAL_ERROR": 500,
 }
 
-VERIFICATION_CHECKS = {
-    "BLOCK_HASH_VALID",
+# Agreed order. Per-block checks run first, in this order, for each block;
+# FILE_HASH_MATCH then runs per evidence item, and CHAIN_HEAD_CONSISTENT last.
+CHECK_ORDER = [
     "PREV_HASH_LINK",
     "INDEX_SEQUENTIAL",
+    "BLOCK_HASH_VALID",
     "SIGNATURE_VALID",
-    "FILE_HASH_MATCH",
     "CUSTODY_CONTINUITY",
-}
+    "FILE_HASH_MATCH",
+    "CHAIN_HEAD_CONSISTENT",
+]
+VERIFICATION_CHECKS = set(CHECK_ORDER)
 
 AUDIT_EVENT_TYPES = {
     "LOGIN", "LOGOUT", "LOGIN_FAILED", "SESSION_EXPIRED", "USER_CREATED",
@@ -105,6 +113,35 @@ def assert_no_leaks(text: str, secrets=()):
             assert str(secret) not in text, "a secret value (password, token, key or file content) leaked"
 
 
+def failure_sort_key(check: dict):
+    """Lowest block index first; within one block, the agreed check order.
+
+    A failure without a block index (e.g. FILE_HASH_MATCH, if B reports it per
+    evidence item) sorts after every per-block failure, since those checks run last.
+    """
+    index = check.get("block_index")
+    return (index is None, index if index is not None else 0, CHECK_ORDER.index(check["check"]))
+
+
+def drop_triggers(db_path, trigger_names):
+    """Drop the append-only triggers in a COPY of the database, so T1 can tamper with it.
+
+    Never call this on a real database. A publishes the trigger names as constants;
+    there is deliberately no trigger-dropping code in the app itself.
+    """
+    import sqlite3
+
+    connection = sqlite3.connect(db_path)
+    try:
+        for name in trigger_names:
+            if not re.fullmatch(r"\w+", name):
+                raise ValueError(f"not a trigger name: {name!r}")
+            connection.execute(f"DROP TRIGGER {name}")  # no IF EXISTS: a renamed trigger must fail loudly
+        connection.commit()
+    finally:
+        connection.close()
+
+
 def assert_verification_result(result: dict, status: str, first_failure: tuple[str, int | None] | None = None):
     """Check the agreed verification result shape, and optionally which check failed first.
 
@@ -113,6 +150,7 @@ def assert_verification_result(result: dict, status: str, first_failure: tuple[s
     expected_fields = {
         "verification_id", "scope", "target_id", "status", "engine_version", "run_by",
         "run_at", "duration_ms", "blocks_checked", "checks", "first_failure",
+        "head_index", "head_hash",
     }
     missing = expected_fields - result.keys()
     assert not missing, f"verification result is missing {sorted(missing)}"
@@ -125,6 +163,8 @@ def assert_verification_result(result: dict, status: str, first_failure: tuple[s
     assert_timestamp(result["run_at"], "run_at")
     assert isinstance(result["duration_ms"], int) and result["duration_ms"] >= 0
     assert isinstance(result["blocks_checked"], int) and result["blocks_checked"] >= 0
+    assert isinstance(result["head_index"], int) and result["head_index"] >= 0, "head_index must be the last block's index"
+    assert isinstance(result["head_hash"], str) and SHA256_RE.match(result["head_hash"]), "head_hash must be 64 hex"
     assert result["status"] == status, f"expected {status}, got {result['status']}: {result['checks']}"
 
     for check in result["checks"]:
@@ -137,9 +177,9 @@ def assert_verification_result(result: dict, status: str, first_failure: tuple[s
         assert result["first_failure"] is None, "a PASS result must have first_failure null"
     else:
         assert result["checks"], "a FAIL result must list the failed checks"
-        first = result["checks"][0]
+        first = min(result["checks"], key=failure_sort_key)
         assert result["first_failure"] == {"check": first["check"], "block_index": first["block_index"]}, (
-            "first_failure must match the first entry in checks"
+            "first_failure must be the failure with the lowest block index (ties: agreed check order)"
         )
         if first_failure is not None:
             assert (first["check"], first["block_index"]) == first_failure, (

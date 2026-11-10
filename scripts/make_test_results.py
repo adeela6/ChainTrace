@@ -34,6 +34,8 @@ PLANNED = {
     "T3": ("Invalid signature: wrong key; flipped signature byte", "422 INVALID_SIGNATURE; FAIL at SIGNATURE_VALID"),
     "T4": ("Duplicate transfer; transfer by non-custodian", "409 DUPLICATE_TRANSFER / NOT_CUSTODIAN, nothing appended"),
     "T5": ("Clean 50+ block chain; then a middle block deleted", "PASS on clean; FAIL at PREV_HASH_LINK"),
+    "T5b": ("Newest blocks deleted after a verification recorded the head",
+            "FAIL at CHAIN_HEAD_CONSISTENT"),
     "T6": ("Viewer views case; report and audit exported", "No secrets anywhere; viewer sees redacted fields"),
     "T-final": ("Malformed JSON, 30 MB file, fake .png, wrong role, repeat submit, restart",
                 "Correct error codes, no stack traces, data intact, chain PASS"),

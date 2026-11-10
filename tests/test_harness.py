@@ -6,6 +6,7 @@ helper is wrong, these fail before it hides a real bug elsewhere.
 
 import json
 import os
+import sqlite3
 import uuid
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from tests.helpers import (
     assert_error_body,
     assert_no_leaks,
     assert_verification_result,
+    drop_triggers,
 )
 
 
@@ -132,9 +134,15 @@ def make_result(**overrides):
         "blocks_checked": 57,
         "checks": [],
         "first_failure": None,
+        "head_index": 56,
+        "head_hash": "ab" * 32,
     }
     result.update(overrides)
     return result
+
+
+def failed(check, block_index):
+    return {"check": check, "block_index": block_index, "status": "FAIL", "reason": f"{check} failed"}
 
 
 FAILED_CHECK = {
@@ -170,13 +178,79 @@ def test_fail_result_from_kickoff_doc():
         (make_result(run_at="2026-11-10 08:31:02"), "PASS", None),
         (make_result(scope="evidence", target_id=None), "PASS", None),
         ({k: v for k, v in make_result().items() if k != "blocks_checked"}, "PASS", None),
+        ({k: v for k, v in make_result().items() if k != "head_hash"}, "PASS", None),
+        (make_result(head_hash="not-a-hash"), "PASS", None),
     ],
     ids=["first_failure-missing", "wrong-block", "pass-with-checks", "unknown-check",
-         "bad-timestamp", "evidence-without-target", "missing-field"],
+         "bad-timestamp", "evidence-without-target", "missing-field", "missing-head", "bad-head-hash"],
 )
 def test_bad_verification_results_are_caught(result, status, first_failure):
     with pytest.raises(AssertionError):
         assert_verification_result(result, status, first_failure)
+
+
+@pytest.mark.parametrize(
+    "checks, expected_first",
+    [
+        # Lowest block index wins, wherever it appears in the list.
+        ([failed("SIGNATURE_VALID", 9), failed("BLOCK_HASH_VALID", 5)], ("BLOCK_HASH_VALID", 5)),
+        # Same block: the agreed check order wins (T5 deletion breaks both of these).
+        ([failed("INDEX_SEQUENTIAL", 7), failed("PREV_HASH_LINK", 7)], ("PREV_HASH_LINK", 7)),
+        # Per-evidence and head checks run after every per-block check.
+        ([failed("FILE_HASH_MATCH", None), failed("CUSTODY_CONTINUITY", 40)], ("CUSTODY_CONTINUITY", 40)),
+        ([failed("CHAIN_HEAD_CONSISTENT", 56)], ("CHAIN_HEAD_CONSISTENT", 56)),
+    ],
+)
+def test_first_failure_rule(checks, expected_first):
+    check, index = expected_first
+    result = make_result(status="FAIL", checks=checks, first_failure={"check": check, "block_index": index})
+    assert_verification_result(result, "FAIL", first_failure=expected_first)
+
+
+def test_first_failure_must_follow_the_rule():
+    checks = [failed("INDEX_SEQUENTIAL", 7), failed("PREV_HASH_LINK", 7)]
+    result = make_result(status="FAIL", checks=checks, first_failure={"check": "INDEX_SEQUENTIAL", "block_index": 7})
+    with pytest.raises(AssertionError):
+        assert_verification_result(result, "FAIL")
+
+
+# --- Trigger dropping for T1 -------------------------------------------------------
+
+
+def make_db_with_trigger(path):
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE blocks (idx INTEGER PRIMARY KEY, payload_json TEXT);
+        INSERT INTO blocks VALUES (5, '{"reason": "original"}');
+        CREATE TRIGGER blocks_no_update BEFORE UPDATE ON blocks
+        BEGIN SELECT RAISE(ABORT, 'blocks are append-only'); END;
+        """
+    )
+    connection.commit()
+    connection.close()
+
+
+def test_drop_triggers_allows_tampering_with_a_copy(tmp_path):
+    db = tmp_path / "copy.db"
+    make_db_with_trigger(db)
+    with sqlite3.connect(db) as connection, pytest.raises(sqlite3.IntegrityError):
+        connection.execute("UPDATE blocks SET payload_json = '{}' WHERE idx = 5")
+
+    drop_triggers(db, ["blocks_no_update"])
+    connection = sqlite3.connect(db)
+    connection.execute("UPDATE blocks SET payload_json = '{\"reason\": \"edited\"}' WHERE idx = 5")
+    connection.commit()
+    assert "edited" in connection.execute("SELECT payload_json FROM blocks").fetchone()[0]
+    connection.close()
+
+
+@pytest.mark.parametrize("name", ["no_such_trigger", "x; DROP TABLE blocks"])
+def test_drop_triggers_fails_loudly_on_bad_names(tmp_path, name):
+    db = tmp_path / "copy.db"
+    make_db_with_trigger(db)
+    with pytest.raises((sqlite3.OperationalError, ValueError)):
+        drop_triggers(db, [name])
 
 
 # --- Audit event -------------------------------------------------------------------

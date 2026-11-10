@@ -93,16 +93,16 @@ def settings(test_env):
 
 
 @pytest.fixture
-def client(test_env):
-    """FastAPI TestClient on a fresh app. Skips until A pushes app.main.create_app()."""
+def client(settings):
+    """FastAPI TestClient on a fresh app with this test's settings. Skips until A pushes create_app()."""
     if importlib.util.find_spec("app.main") is None:
-        pytest.skip("Waiting on A: app/main.py does not exist yet (test-plan Q11)")
+        pytest.skip("Waiting on A: app/main.py does not exist yet")
     import app.main  # import errors inside A's code should fail loudly, not skip
 
     if not hasattr(app.main, "create_app"):
-        pytest.skip("Waiting on A: app.main.create_app() (test-plan Q11)")
+        pytest.skip("Waiting on A: app.main.create_app(settings)")
 
     from fastapi.testclient import TestClient
 
-    with TestClient(app.main.create_app()) as test_client:
+    with TestClient(app.main.create_app(settings)) as test_client:
         yield test_client
