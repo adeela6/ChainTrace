@@ -3,7 +3,9 @@ from pathlib import Path
 from cryptography.fernet import Fernet
 from fastapi import FastAPI
 
+from app.api.auth import router as auth_router
 from app.api.errors import register_error_handlers
+from app.api.ratelimit import RateLimiter
 from app.config import Settings
 from app.repository.database import init_db, make_engine, make_session_factory
 
@@ -28,12 +30,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = make_session_factory(engine)
+    app.state.limiter = RateLimiter()  # fresh per app, so tests don't share counters
 
     register_error_handlers(app)
+
+    app.include_router(auth_router, prefix="/api/v1")
+
     return app
-
-
-def __getattr__(name: str):
-    if name == "app":
-        return create_app()
-    raise AttributeError(name)
